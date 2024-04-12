@@ -1,0 +1,958 @@
+Auth
+	idEmpresa long
+	idFilial long
+	idLocal long
+	seqEquipamento SeqEquipamento
+	
+AuthInput notSavedMessage
+	idEmpresa Empresa autoFillWhenOneItem
+	descricaoEmpresa Str autoFill=idEmpresa.NOME
+	idFilial Filial autoFillWhenOneItem
+	descricaoFilial Str autoFill=idFilial.NOME
+	idLocal Local
+	descricaoLocal Str autoFill=idLocal.NOME
+	idChaveAcesso Str notFormatThousand onlineValidate=chave numericKeyboard
+
+	codigoEquipamento Str notFormatThousand onlineValidate=Valida_Equipamento_Mobile
+	seqEquipamento int notFill 
+	descricaoEquipamento Str notFill
+
+	confirmaConfig boolean notShowNo
+	fieldEvents
+		fillCondition
+			codigoEquipamento
+				seqEquipamento = null
+				descricaoEquipamento = null
+				return true
+		filterListRecord
+			idFilial
+				if listRecord.EMPRESA_SEQ_DB != idEmpresa
+					return false
+			idLocal
+				if listRecord.FILIAL_SEQ_DB != idFilial.SEQ_DB
+					return false
+		getInputScreenLabel
+			confirmaConfig
+				return lang=custom.msgCustomConfirmaConfig vars=eqp:descricaoEquipamento
+
+Empresa sync=beforeInstall
+	SEQ_DB int hide
+	NOME String
+
+Filial sync=beforeInstall
+	SEQ_DB long
+	NOME String
+	EMPRESA_SEQ_DB int
+
+Local sync=beforeInstall
+	SEQ_DB long 
+	NOME String
+	TIMEZONE String
+	FILIAL_SEQ_DB long
+
+seqEquipamento
+	id int
+
+
+UltimaMedicao memory
+	id inc
+	ultimaMedicao decimal manualDecimal decimalSize=2
+	eqp long
+	tipoMedicao int
+
+Boletim sync=out cleanupDays=20 noFinishAction noSyncAction
+	id inc
+	SEQ_DB_DEVICE long uuid
+	dataInicio Now timeTypeField=tipoDataInicio
+	flagOnlineInicio int notFill onlineFlagCreate
+	locationInicio Location inlineData
+	seqEquipamento SeqEquipamento
+	eqp Eqp
+	
+	efetivo_Funcionario Efetivo_Funcionario
+	ups Ups ignoreExternal
+	DESC String notFill ignoreExternal
+
+	schedulerAlerta int autoFill=0 ignoreExternal
+	operacaoAtual Oper autoFill=null ignoreExternal
+
+	marte _MARTE_STATUS inlineData
+	ultimaMedicao decimal notFill ignoreExternal manualDecimal decimalSize=2
+	medicaoMarte decimal maxLength=10 notFill manualDecimal decimalSize=2
+	medicaoInicio decimal maxLength=10 manualDecimal decimalSize=2
+
+	confirmaIniciarBoletim boolean notShowNo ignoreExternal
+	
+	menuChecklist MenuChecklist transient notFill add ignoreExternal
+	flagMomento boolean autoFill=0 ignoreExternal
+
+	apontamentoProdutivo ApontamentoProdutivo transient notFill add ignoreExternal splittedGridField=oper splittedGridFilterField=FLAG_PRODUTIVA splittedGridTimeout=2s
+	
+	trocaUP TrocaUP transient notFill add ignoreExternal
+
+	marteFim _MARTE_STATUS inlineData fill=Finish
+	medicaoFimMarte decimal maxLength=10 notFill manualDecimal decimalSize=2
+	medicaoFim decimal maxLength=10 fill=Finish manualDecimal decimalSize=2	
+
+	dataFim Now fill=Finish timeTypeField=tipoDataFim
+	flagOnlineFim int notFill onlineFlagFinish
+	locationFim Location inlineData fill=Finish
+	
+	iniciarChecklistFim boolean fill=Finish ignoreExternal
+	menuChecklistFim MenuChecklist fillCondition="iniciarChecklistFim == true" fill=Finish add ignoreExternal
+
+	confirmaFinalizarBoletim boolean notShowNo fill=Finish ignoreExternal
+
+	server name=EQP_BOLETIM
+
+	screens
+		list
+			ups
+				events
+					onGetRecords
+						Object ids = getSimovaMessengerData
+						if ids == null
+							return Select * From Ups
+						Ups ups1 = Select * From Ups where SEQ_DB in ids
+						if ups1 != null
+							return ups1
+						return Select * From Ups
+	events
+		afterInsert
+			insert into Boletim_sat_ini (SEQ_DB_DEVICE, dataInicio, eqp, efetivo_Funcionario) VALUES (:SEQ_DB_DEVICE, :dataInicio, :eqp, :efetivo_Funcionario.SEQ_DB)
+			Boletim previousBoletim = SelectLast from Boletim where id != :id
+			if previousBoletim == null
+				connectMarte
+			else
+				if previousBoletim.eqp != :eqp
+					connectMarte
+			setStatusColor inactive
+
+		afterFinish
+			stopSound
+			stopAlertTimer
+			cancelSchedule
+			setStatusColor inactive
+			setInfoView @
+			dropTable ResumoApontamento
+			dropTable ApontamentosHook
+			UPDATE UltimaMedicao SET ultimaMedicao = :medicaoFim, eqp = :eqp.SEQ_DB, tipoMedicao = %TipoMedicaoManual WHERE eqp == eqp.SEQ_DB
+			UPDATE Ups set FLAG_ATIVO = false
+			insert into Boletim_sat_fim (SEQ_DB_DEVICE, dataFim) VALUES (:SEQ_DB_DEVICE, :dataFim)
+			
+			UPDATE Grupo_Questao SET flagRespondido = false
+			UPDATE Questao SET flagRespondido = false
+			dropTable Resposta
+			dropTable ResumoCheckList
+			UPDATE ChecklistPreenchido set preenchido = 0
+						
+		beforeFinish
+			flagMomento = 1	
+			save record	
+			Grupo_Questao q1 = selectFirst FROM Grupo_Questao WHERE flagRespondido == false AND FLAG_MOMENTO == :flagMomento
+			if q1 != null
+				toast lang=custom.msgFinalizeChecklist
+				crud MenuChecklist
+				return false
+	fieldEvents
+		fillCondition		
+			medicaoFim
+				if marteFim != null
+					medicaoFimMarte = marteFim.engineHorimeterDecimal
+				return true
+			medicaoInicio
+				if marte != null
+					medicaoMarte = marte.engineHorimeterDecimal
+					INSERT INTO UltimaMedicao (ultimaMedicao, eqp, tipoMedicao) VALUES (:medicaoMarte, :eqp.SEQ_DB, %TipoMedicaoMarte)
+					medicaoInicio = medicaoMarte
+					return true
+				else
+					UltimaMedicao m = SelectLast from UltimaMedicao where eqp == :eqp.SEQ_DB and tipoMedicao == %TipoMedicaoManual
+					if m != null
+						medicaoInicio = m.ultimaMedicao
+						return false
+					else
+						return true
+		autoFill
+			eqp
+				Eqp e = SelectFirst FROM Eqp WHERE SEQ_DB == :seqEquipamento
+				return e
+			iniciarChecklistFim
+				save record saveSyncOut
+				sync background
+				flagMomento = 1
+				save record
+				Grupo_Questao q1 = selectFirst FROM Grupo_Questao WHERE flagRespondido == false AND FLAG_MOMENTO == :flagMomento
+				if q1 != null
+					return true
+				return false
+		afterFill
+			confirmaIniciarBoletim
+				if confirmaIniciarBoletim == true
+					UPDATE Ups set FLAG_ATIVO = true WHERE SEQ_DB == :ups
+					if marte == null
+						INSERT INTO UltimaMedicao (ultimaMedicao, eqp, tipoMedicao) VALUES (:medicaoInicio, :eqp.SEQ_DB, %TipoMedicaoManual)
+					schedulerAlerta = schedule time=3m repeatIn=3m
+						Boletim b = selectLast from Boletim
+						if b.operacaoAtual == null
+							setAlertTimer lang=custom.msgRealizeApontamento totalTime=5s repeat=0
+							Speech @"Boletim iniciado sem apontamento registrado! Realize o apontamento de sua atividade!"
+						else
+							cancelSchedule actions=id
+
+		beforeBack
+			medicaoFim
+				flagMomento = 0
+				save record
+
+		filterListRecord
+			ups
+				return listRecord.FLAG_FINALIZADO == false
+		onValidate
+			medicaoFim
+				UltimaMedicao medicao = SelectLast FROM UltimaMedicao WHERE eqp = :eqp.SEQ_DB
+				if medicao != null
+					if medicao.ultimaMedicao > 0
+						ultimaMedicao = medicao.ultimaMedicao
+						if medicaoFim - UltimaMedicao > 2400.0
+							return input passwordType=random text=custom.msgMedicaAtualMaior24 vars=atual:medicaoFim,anterior:ultimaMedicao
+						if medicaoFim - ultimaMedicao > 800.0
+							return confirm lang=custom.msgMedicaAtualMaior8 vars=atual:medicaoFim,anterior:ultimaMedicao
+						if ultimaMedicao > medicaoFim
+							return confirm lang=custom.msgMedicaoMenor vars=atual:medicaoFim,anterior:ultimaMedicao
+
+	crudActions
+		MenuChecklist
+			isVisible
+				Grupo_Questao q1 = selectFirst FROM Grupo_Questao WHERE flagRespondido == false AND FLAG_MOMENTO == :flagMomento	
+				return q1 != null
+			fill menuChecklist
+		apontamentoProdutivo
+			isVisible
+				Grupo_Questao q1 = selectFirst FROM Grupo_Questao WHERE flagRespondido == false AND FLAG_MOMENTO == :flagMomento	
+				if q1 != null	
+					return false	
+				else	
+					UPs u = SelectFirst FROM UPs where FLAG_ATIVO == true and FLAG_FINALIZADO == false	
+					return u != null
+			fill apontamentoProdutivo
+		trocaUP
+			isVisible
+				Grupo_Questao q1 = selectFirst FROM Grupo_Questao WHERE flagRespondido == false AND FLAG_MOMENTO == :flagMomento	
+				if q1 != null	
+					return false	
+				else	
+					UPs u = SelectFirst FROM UPs where FLAG_ATIVO == true and FLAG_FINALIZADO == false	
+					return u != null
+			fill trocaUP
+		ResumoApontamento
+			isVisible
+				Grupo_Questao q1 = selectFirst FROM Grupo_Questao WHERE flagRespondido == false AND FLAG_MOMENTO == :flagMomento	
+				if q1 != null	
+					return false	
+				else	
+					ResumoApontamento a = SelectFirst FROM ResumoApontamento	
+					return a != null
+			show ResumoApontamentoDetail
+		ApontamentosHook
+			Grupo_Questao q1 = selectFirst FROM Grupo_Questao WHERE flagRespondido == false AND FLAG_MOMENTO == :flagMomento	
+				if q1 != null	
+					return false
+			show ApontamentosHookReceivedDetail
+		ResumoCheckList
+			isVisible
+				ResumoCheckList q1 = selectFirst FROM ResumoCheckList	
+				if q1 != null	
+					return true
+			show ResumoCheckListDetail
+		FinalizarBoletim
+			finishRecord
+
+
+Boletim_sat_ini sync=out cleanupDays=20 noFinishAction satellite
+	id inc
+	SEQ_DB_DEVICE long
+	dataInicio Date
+	locationInicio Location_sat inlineData location
+	eqp int
+	efetivo_Funcionario int
+	server name=BOLETIM_SAT_INI
+
+Boletim_sat_fim sync=out cleanupDays=20 noFinishAction satellite
+	id inc
+	SEQ_DB_DEVICE long
+	dataFim Date
+	locationFim Location_sat inlineData location
+	server name=BOLETIM_SAT_FIM
+
+
+ApontamentoProdutivo sync=out cleanupDays=7
+	id inc
+	boletim Boletim
+	SEQ_DB_DEVICE_MASTER long autoFill=boletim.SEQ_DB_DEVICE
+	SEQ_DB_DEVICE long uuid
+	SEQ_DB_DEVICE_HOOK long notFill
+	dataInicio Now timeTypeField=tipoDataInicio
+	location Location inlineData
+	
+	oper Oper
+	eqp Eqp autoFill=boletim.eqp
+	efetivo_Funcionario Efetivo_Funcionario autoFill=boletim.efetivo_Funcionario
+	ups UPs autoFill=boletim.ups
+	descUP String autoFill=ups.CODIGO ignoreExternal
+	seqUP int autoFill=ups.SEQ_DB ignoreExternal
+	origem int autoFill=1
+	DESC String notFill ignoreExternal
+
+	marte _MARTE_STATUS inlineData
+	flagMarte boolean notFill
+	ultimaMedicao decimal notFill ignoreExternal manualDecimal decimalSize=2
+	medicaoAtual decimal maxLength=10 manualDecimal decimalSize=2
+	medicaoMarte decimal maxLength=10 notFill manualDecimal decimalSize=2
+	medicaoManual decimal maxLength=10 notFill manualDecimal decimalSize=2
+	
+	oper_Grupo Oper_Grupo autoFill=oper.OPER_GRUPO
+	descOper String autoFill=oper.DESCRICAO ignoreExternal
+	tipoApontamento int autoFill=oper.FLAG_PRODUTIVA
+	
+	eqpCarga Eqp fillCondition="oper.TIPO_ACAO == 2"
+	descEqp String fillCondition="oper.TIPO_ACAO == 2" autoFill=eqpCarga.DESCRICAO ignoreExternal
+	cmm String fillCondition="oper.TIPO_ACAO == 2" minValue=6 mask="9999999999"
+	
+	opcaoOperacao OpcoesOperacao fillCondition="oper.TIPO_ACAO==2"
+	flagAbortado boolean notFill fillCondition="oper.TIPO_ACAO==2"
+	
+	postoAbastecimento Posto_Abastecimento fillCondition="oper.TIPO_ACAO==4"
+	combustivel Combustivel fillCondition="oper.TIPO_ACAO==4"
+	quantidadeAbastecida decimal fillCondition="oper.TIPO_ACAO==4"
+	horimetroAbastecimento decimal maxLength=10 manualDecimal decimalSize=2 fillCondition="oper.TIPO_ACAO==4"
+	
+	observacao Str fillCondition="oper_Grupo.FLAG_MANUTENCAO == true"
+	 
+	finalizaCarga boolean notShowNo notBack ignoreExternal fillCondition="oper.TIPO_ACAO==2 && flagAbortado==false"
+	dataFim Now timeTypeField=tipoDataFim fillCondition="finalizaCarga==true || flagAbortado==true"
+	server name=EQP_APT
+
+	events
+		afterInsert
+			if marte != null
+				UPDATE UltimaMedicao SET ultimaMedicao = :medicaoAtual, tipoMedicao = %TipoMedicaoMarte where eqp == :eqp.SEQ_DB
+			else
+				UPDATE UltimaMedicao SET ultimaMedicao = :medicaoAtual, tipoMedicao = %TipoMedicaoManual where eqp == :eqp.SEQ_DB
+				
+			ResumoApontamento resumo = SelectFirst FROM ResumoApontamento WHERE flagApontouFim == false
+			if resumo != null
+				Long tempos = difDateMilli resumo.dataInicio dataInicio
+				String duracaos = formatDateMilli tempos
+				resumo.duracao = duracaos
+				resumo.dataFim = dataInicio
+				resumo.flagApontouFim = true
+				save resumo
+
+			Long tempo = difDateMilli dataInicio dataFim
+			String duracao = formatDateMilli tempo
+			
+			if flagAbortado == false
+				if oper.FLAG_PRODUTIVA == true
+					setStatusColor green
+					if oper.FLAG_OPER_BATEDOR == true
+						insert into ApontamentoProdutivo_sat (SEQ_DB_DEVICE_MASTER, SEQ_DB_DEVICE, dataInicio, oper, ups) VALUES (:SEQ_DB_DEVICE_MASTER, :SEQ_DB_DEVICE, :dataInicio, :oper.SEQ_DB, :seqUP)
+						insert into ResumoApontamento (dataInicio, tipoApontamento, oper, up, flagApontouFim, FLAG_MANUTENCAO, FLAG_PRODUTIVA, FLAG_PARADA_OPERACIONAL, FLAG_PARADA_PROCESSO) VALUES (:dataInicio, @"Serviço", :descOper, :descUP, false, :oper.FLAG_MANUTENCAO, :oper.FLAG_PRODUTIVA, :oper.FLAG_PARADA_OPERACIONAL, :oper.FLAG_PARADA_PROCESSO)
+					else
+						if oper.TIPO_ACAO == 2 //Aqui somente se for produtiva de carga
+							insert into ApontamentoProdutivoCarga_sat (SEQ_DB_DEVICE_MASTER, SEQ_DB_DEVICE, SEQ_DB_DEVICE_HOOK, dataInicio, oper, ups, eqpCarga, dataFim) VALUES (:SEQ_DB_DEVICE_MASTER, :SEQ_DB_DEVICE, :SEQ_DB_DEVICE_HOOK, :dataInicio, :oper.SEQ_DB, :seqUP, :eqpCarga.SEQ_DB, :dataFim)
+						
+							insert into Informa_ApontamentoProdutivoFim_sat (SEQ_DB_DEVICE_MASTER, SEQ_DB_DEVICE, dataFim) VALUES (:SEQ_DB_DEVICE_MASTER, :SEQ_DB_DEVICE, :dataFim)
+							sync background
+							
+							insert into ResumoApontamento (dataInicio, dataFim, duracao, tipoApontamento, oper, eqp, up, flagApontouFim, FLAG_MANUTENCAO, FLAG_PRODUTIVA, FLAG_PARADA_OPERACIONAL, FLAG_PARADA_PROCESSO) VALUES (:dataInicio, :dataFim, duracao, @"Serviço", :descOper, :descEqp, :descUP, true, :oper.FLAG_MANUTENCAO, :oper.FLAG_PRODUTIVA, :oper.FLAG_PARADA_OPERACIONAL, :oper.FLAG_PARADA_PROCESSO)
+							
+						else
+							insert into ApontamentoProdutivo_sat (SEQ_DB_DEVICE_MASTER, SEQ_DB_DEVICE, dataInicio, oper, ups) VALUES (:SEQ_DB_DEVICE_MASTER, :SEQ_DB_DEVICE, :dataInicio, :oper.SEQ_DB, :seqUP)
+						
+							insert into ResumoApontamento (dataInicio, dataFim, duracao, tipoApontamento, oper, up, flagApontouFim, FLAG_MANUTENCAO, FLAG_PRODUTIVA, FLAG_PARADA_OPERACIONAL, FLAG_PARADA_PROCESSO) VALUES (:dataInicio, :dataFim, duracao, @"Serviço", :descOper, :descUP, true, :oper.FLAG_MANUTENCAO, :oper.FLAG_PRODUTIVA, :oper.FLAG_PARADA_OPERACIONAL, :oper.FLAG_PARADA_PROCESSO)
+							
+				else
+					setStatusColor red
+					insert into ApontamentoProdutivo_sat (SEQ_DB_DEVICE_MASTER, SEQ_DB_DEVICE, dataInicio, oper, ups) VALUES (:SEQ_DB_DEVICE_MASTER, :SEQ_DB_DEVICE, :dataInicio, :oper.SEQ_DB, :seqUP)
+					insert into ResumoApontamento (dataInicio, tipoApontamento, oper,  up, flagApontouFim, FLAG_MANUTENCAO, FLAG_PRODUTIVA, FLAG_PARADA_OPERACIONAL, FLAG_PARADA_PROCESSO) VALUES (:dataInicio, @"Perda", :descOper, :descUP, false, :oper.FLAG_MANUTENCAO, :oper.FLAG_PRODUTIVA, :oper.FLAG_PARADA_OPERACIONAL, :oper.FLAG_PARADA_PROCESSO)
+				
+			Boletim b = SelectLast FROM Boletim
+			if b != null
+				DESC = @
+				DESC = concat @"Operação: " :oper.DESCRICAO
+				b.operacaoAtual = :oper
+				b.DESC = DESC
+				save b
+				setInfoView DESC
+			toast @"Serviço Registrado com Sucesso!"
+	
+	fieldEvents
+		autoFill
+			boletim
+				Boletim b = SelectLast FROM Boletim
+				return b
+			medicaoAtual
+				if marte != null
+					medicaoMarte = marte.engineHorimeterDecimal 
+					return marte.engineHorimeterDecimal
+				else
+					UltimaMedicao medicao = SelectLast from UltimaMedicao where eqp == :eqp.SEQ_DB
+					if medicao.tipoMedicao == %TipoMedicaoManual
+						medicaoManual = medicao.ultimaMedicao
+					else
+						medicaoMarte = medicao.ultimaMedicao
+					return medicao.ultimaMedicao
+			medicaoMarte
+				if marte != null
+					return marte.engineHorimeterDecimal
+		afterFill
+			marte
+				if marte == null
+					connectMarte
+					flagMarte = 0
+				else
+					flagMarte = 1
+			eqpCarga
+				descEqp = eqpCarga.DESCRICAO
+				Boletim b = SelectLast FROM Boletim
+				if b != null
+					DESC = @
+					DESC = concat @"Operação: " :oper.DESCRICAO
+					DESC = concat DESC @"\nPlaca: "
+					DESC = concat DESC :descEqp
+					b.operacaoAtual = :oper
+					b.DESC = DESC
+					save b
+					setInfoView DESC
+				//Enviar informação de inicio de apontamento de carga
+				insert into Informa_ApontamentoProdutivo_sat (SEQ_DB_DEVICE_MASTER, SEQ_DB_DEVICE, dataInicio, oper, ups, eqpCarga, eqpGrua) VALUES (:SEQ_DB_DEVICE_MASTER, :SEQ_DB_DEVICE, :dataInicio, :oper.SEQ_DB, :seqUP, :eqpCarga.SEQ_DB, :eqp.SEQ_DB)
+				sync background
+			opcaoOperacao
+				if opcaoOperacao.id == 1 //Abortar operação
+					flagAbortado = true
+					if tipoApontamento == 1 //produtivo
+						insert into Informa_ApontamentoProdutivoFim_sat (SEQ_DB_DEVICE_MASTER, SEQ_DB_DEVICE, dataFim) VALUES (:SEQ_DB_DEVICE_MASTER, :SEQ_DB_DEVICE, currentDate)
+						sync background
+				else
+					flagAbortado = false
+					if tipoApontamento == 1 //produtivo
+						ApontamentosHook h = SelectLast FROM ApontamentosHook where SEQ_DB_DEVICE_CARGA is null
+						if h != null
+							UPDATE ApontamentosHook SET SEQ_DB_DEVICE_CARGA = :SEQ_DB_DEVICE WHERE id == h.id
+							SEQ_DB_DEVICE_HOOK = h.id
+							toast @"Apontamento Hook vinculado."
+						else
+							toast @"Apontamento Hook não encontrado! Finalize a operação na Hook e aguarde o recebimento antes de finalizar na Simova."
+			finalizaCarga
+				if tipoApontamento == 1 //produtivo
+					ApontamentosHook c = SelectLast FROM ApontamentosHook where SEQ_DB_DEVICE_CARGA = :SEQ_DB_DEVICE
+					if c == null
+						ApontamentosHook h = SelectLast FROM ApontamentosHook where SEQ_DB_DEVICE_CARGA is null
+						if h != null
+							UPDATE ApontamentosHook SET SEQ_DB_DEVICE_CARGA = :SEQ_DB_DEVICE WHERE id == h.id
+							SEQ_DB_DEVICE_HOOK = h.id
+							toast @"Apontamento Hook vinculado."
+						else
+							toast @"Apontamento Hook não encontrado para a operação finalizada."
+				if oper.FLAG_OPER_BATEDOR == false
+					return oper.FLAG_PRODUTIVA == true
+				return false
+			dataFim
+				if flagAbortado == false
+					return finalizaCarga == true
+		fillCondition
+			medicaoAtual
+				if marte != null
+					medicaoAtual = marte.engineHorimeterDecimal
+				return false
+		onValidate
+			medicaoAtual
+				UltimaMedicao medicao = SelectLast FROM UltimaMedicao where eqp == :eqp.SEQ_DB
+				if medicao != null
+					if medicao.ultimaMedicao > 0
+						ultimaMedicao = medicao.ultimaMedicao
+						if ultimaMedicao > medicaoAtual
+							return confirm lang=custom.msgMedicaoMenor vars=atual:medicaoAtual,anterior:ultimaMedicao
+			eqpCarga
+				if eqpCarga != null
+					descEqp = eqpCarga.DESCRICAO
+					return confirm lang=custom.msgconfirmaInicioOperacao vars=descEqp:descEqp,descOper:descOper
+					
+			opcaoOperacao
+				if opcaoOperacao.id == 1 //Abortar operação
+					return confirm lang=custom.msgConfirmaAbortarApontamento vars=descEqp:descEqp,descOper:descOper
+					
+			horimetroAbastecimento
+				UltimaMedicao medicao = SelectLast FROM UltimaMedicao WHERE eqp = :eqp.SEQ_DB
+				if medicao != null
+					if medicao.ultimaMedicao > 0
+						ultimaMedicao = medicao.ultimaMedicao
+						if ultimaMedicao > horimetroAbastecimento
+							return confirm lang=custom.msgMedicaoMenor vars=atual:horimetroAbastecimento,anterior:ultimaMedicao
+
+		filterListRecord
+			oper
+				if listRecord.FLAG_PRODUTIVA == true
+					return listRecord.FLAG_PRODUTIVA == true
+				else
+					return true
+			eqpCarga
+				return listRecord.EQP_TIPO != %EqpGrua
+		getInputScreenLabel
+			finalizaCarga
+				return lang=custom.msgCustomconfirmaFinalizarCarga vars=ativ:descOper,eqp:descEqp
+
+ApontamentoProdutivo_sat sync=out cleanupDays=7 satellite
+	id inc
+	SEQ_DB_DEVICE_MASTER long
+	SEQ_DB_DEVICE long
+	dataInicio Date
+	location Location_sat inlineData location
+	oper int
+	ups int
+	server name=EQP_APT_SAT
+	
+ApontamentoProdutivoCarga_sat sync=out cleanupDays=7 satellite
+	id inc
+	SEQ_DB_DEVICE_MASTER long
+	SEQ_DB_DEVICE long
+	SEQ_DB_DEVICE_HOOK long
+	dataInicio Date
+	location Location_sat inlineData location
+	oper int
+	ups int
+	eqpCarga int
+	dataFim Date
+	server name=EQP_APT_SAT
+	
+Informa_ApontamentoProdutivo_sat sync=out cleanupDays=7 satellite
+	id inc
+	SEQ_DB_DEVICE long
+	SEQ_DB_DEVICE_MASTER long
+	dataInicio Date
+	oper int
+	ups int
+	eqpCarga int
+	eqpGrua int
+	server name=INFO_APT_SAT
+	
+Informa_ApontamentoProdutivoFim_sat sync=out cleanupDays=7 satellite
+	id inc
+	SEQ_DB_DEVICE long
+	SEQ_DB_DEVICE_MASTER long
+	dataFim Date
+	server name=INFO_APT_SAT
+
+TrocaUP
+	id inc
+	boletim Boletim
+	oldUP UPs autoFill=boletim.ups
+	descOLD String autoFill=oldUP.DESCRICAO
+	ups UPs
+	descNew String autoFill=ups.DESCRICAO
+	confirmaTrocaUP boolean notShowNo
+	screens
+		list
+			ups
+				events
+					onGetRecords
+						Object ids = getSimovaMessengerData
+						if ids == null
+							return Select * From Ups
+						Ups ups1 = Select * From Ups where SEQ_DB in ids
+						if ups1 != null
+							return ups1
+						return Select * From Ups
+	fieldEvents
+		autoFill
+			boletim
+				Boletim b = SelectLast FROM Boletim
+				return b
+		afterFill
+			confirmaTrocaUP
+				if confirmaTrocaUP == true
+					Boletim b = SelectLast FROM Boletim
+					if b.ups != :ups
+						b.ups = :ups
+						save b
+		getInputScreenLabel
+			confirmaTrocaUP
+				return lang=custom.msgCustomconfirmaTrocaUP vars=oldUP:descOLD,newUP:descNew
+		filterListRecord
+			ups
+				return listRecord.FLAG_FINALIZADO == false
+
+ApontamentosHookReceived transient
+	id inc
+	apontamentos ApontamentoHookReceived	
+	
+ApontamentoHookReceived sync=in required=false cleanUpDays=10
+	id long uuid
+	idHook int
+	data String
+	hora String
+	tempoDeCarga String
+	horas Integer	
+	tempoDeCargaHora Integer	
+	tempoDeCargaMinuto Integer
+	produto String
+	grua String
+	operador String
+	veiculo String
+	codigo String
+	bancos String
+	cargaBanco1 String
+	cargaBanco2 String
+	cargaBanco3 String
+	cargaBanco4 String
+	cargaBanco5 String
+	cargaBanco6 String
+	cargaBanco7 String
+	cargaBanco8 String
+	cargaBanco9 String
+	operacoesDeCarga String
+	acumulado String
+	tara String
+	liquido String
+	cargaPrevistaBanco1 String
+	cargaPrevistaBanco2 String
+	cargaPrevistaBanco3 String
+	cargaPrevistaBanco4 String
+	cargaPrevistaBanco5 String
+	cargaPrevistaBanco6 String
+	cargaPrevistaBanco7 String
+	cargaPrevistaBanco8 String
+	cargaPrevistaBanco9 String
+	filtroOculto String
+	operacoesOcultas String
+	events
+		onRecordReceived
+			speech Custom.ApontamentosHookReceived
+			toast @"Apontamento Hook recebido. Finalize a operação de carga!"
+			ApontamentosHook apt = INSERT INTO ApontamentosHook(id,idHook,data,hora,tempoDeCarga,operacoesDeCarga,cargaBanco1,cargaBanco2,cargaBanco3,cargaBanco4,acumulado,liquido) VALUES(id,idHook,data,hora,tempoDeCarga,operacoesDeCarga,cargaBanco1,cargaBanco2,cargaBanco3,cargaBanco4,acumulado,liquido)
+			
+			Object objData = split delimiter=@":" value=tempoDeCarga
+			Object horas1 = get position=0 from=objData
+			Integer tempoDeCargaHora1 = 60 * horas1
+			Object tempoDeCargaMinuto1 = get position=1 from=objData
+			apt.tempoDeCargaEmMinutos = tempoDeCargaHora1 + tempoDeCargaMinuto1
+			save apt
+
+ApontamentosHook sync=out cleanUpDays=10 satellite
+	id long uuid
+	idHook int
+	SEQ_DB_DEVICE_CARGA long
+	data String
+	hora String
+	tempoDeCarga String
+	tempoDeCargaEmMinutos Integer
+	operacoesDeCarga String
+	cargaBanco1 String
+	cargaBanco2 String
+	cargaBanco3 String
+	cargaBanco4 String
+	acumulado String
+	liquido String
+	server name=APT_HOOK
+
+ChecklistPreenchido
+	id inc
+	preenchido int
+	
+ResumoCheckList
+	id inc
+	descricao Str
+	tipoResposta Tipo_Resposta
+	observacao Str
+	data Date
+
+ResumoApontamento
+	id inc
+	dataInicio Date
+	dataFim Date
+	duracao String
+	tipoApontamento String
+	oper String
+	eqp String
+	up String
+	flagApontouFim boolean
+	FLAG_MANUTENCAO boolean
+	FLAG_PRODUTIVA boolean
+	FLAG_PARADA_OPERACIONAL boolean
+	FLAG_PARADA_PROCESSO boolean
+
+//------------------------CHECKLIST --------------------------
+Grupo_Questao sync=in emptyVerify=false memory
+	SEQ_DB long hide
+	DESCRICAO Str
+	FLAG_MOMENTO boolean
+	FLAG_PREENCHIMENTO boolean
+	flagRespondido boolean defaultValue=false
+	server name=Grupo_Questao_Equipamento_Mobile
+
+Questao sync=in emptyVerify=false memory
+	SEQ_DB long hide
+	DESCRICAO Str
+	CHECK_GRUPO_QUESTAO_SEQ_DB Grupo_Questao
+	CHECK_TIPO_RESPOSTA_LOVN List<Tipo_Resposta>
+	ORDEM int
+	flagRespondido boolean defaultValue=false
+	server name=Questao_Mobile
+
+Tipo_Resposta sync=in emptyVerify=false memory
+	SEQ_DB long hide
+	DESCRICAO Str
+	FLAG_OBSERVACAO boolean
+	FLAG_FOTO boolean
+	server name=Tipo_Resposta_Mobile
+
+MenuChecklist cleanupDays=7 notSavedMessage //sync=out 
+	id inc ignoreExternal
+	
+	boletim Boletim
+	SEQ_DB_DEVICE_MASTER long
+	location Location inlineData
+	
+	operador Efetivo_Funcionario autoFill=boletim.efetivo_Funcionario
+	equipamento Eqp autoFill=boletim.eqp
+	tipoOper boolean notFill
+	data Now ignoreExternal
+	flagMomento boolean autoFill=boletim.flagMomento
+
+	apontar boolean ignoreExternal
+	todosApontados boolean notShowNo notShowYes fillCondition="apontar == false" ignoreExternal
+
+	mobChecklist List<ApontamentoChecklist> transient loop autoInitializeNew finishOnEndLoop fillCondition="apontar == true" ignoreExternal
+	ignoreData boolean autoFill=true
+	fieldEvents
+		autoFill
+			boletim
+				Boletim b = selectLast from Boletim
+				return b
+			apontar
+				Grupo_Questao q2 = selectFirst FROM Grupo_Questao where flagRespondido == false AND FLAG_MOMENTO == :flagMomento
+				if q2 != null
+					return true
+				else
+					toast @"Não há questões para responder!"
+					return false
+			SEQ_DB_DEVICE_MASTER
+				return boletim.SEQ_DB_DEVICE
+
+ApontamentoChecklist sync=out cleanupDays=7 notSavedMessage
+	id inc ignoreExternal
+	boletim Boletim
+	menuChecklist MenuChecklist ignoreExternal
+	flagMomento boolean autoFill=menuChecklist.flagMomento
+	SEQ_DB_DEVICE_MASTER long
+	
+	location Location inlineData
+	seqEquipamento SeqEquipamento
+	operador Efetivo_Funcionario
+	equipamento Eqp
+
+	data Now ignoreExternal
+	apontar boolean ignoreExternal
+	ultimaMedicao decimal notFill ignoreExternal manualDecimal decimalSize=2
+	todosApontados boolean notShowNo notShowYes fillCondition="apontar == false" ignoreExternal 
+	grupo_Questao Grupo_Questao fillCondition="apontar == true" notBack fixedPoint autoFillWhenOneItem ignoreExternal
+	grupoDescricao Str autoFill=grupo_Questao.DESCRICAO
+	flagPreenchimento boolean autoFill=grupo_Questao.FLAG_PREENCHIMENTO
+
+	responderQuestoes boolean fillCondition="flagPreenchimento == true"
+
+	checklistDescricao Str autoFill=grupo_Questao.DESCRICAO ignoreExternal
+	resposta List<Resposta> getManyRecords="select * from Questao WHERE CHECK_GRUPO_QUESTAO_SEQ_DB == :grupo_Questao.SEQ_DB and flagRespondido == false order by ORDEM" fillCondition="apontar == true" ignoreExternal
+	ignoreData boolean autoFill=true
+	server name=EQP_CHECKLIST_MA
+	fieldEvents
+		autoFill
+			apontar
+				Grupo_Questao q3 = SelectFirst FROM Grupo_Questao WHERE flagRespondido == false AND FLAG_MOMENTO == :flagMomento
+				if q3 != null
+					return true
+				else
+					return false
+			boletim
+				Boletim b = selectLast FROM Boletim
+				return b
+			SEQ_DB_DEVICE_MASTER
+				return boletim.SEQ_DB_DEVICE
+			operador
+				return boletim.efetivo_Funcionario
+			equipamento
+				return boletim.eqp
+		filterListRecord
+			grupo_Questao
+				if listRecord.flagRespondido == false
+					if listRecord.FLAG_MOMENTO == :flagMomento
+						return true
+				return false
+		afterFill
+			flagPreenchimento
+				if flagPreenchimento == false
+					responderQuestoes = true
+			responderQuestoes
+				if responderQuestoes == false
+					apontar = false
+					UPDATE Grupo_Questao SET flagRespondido = true WHERE SEQ_DB == :grupo_Questao.SEQ_DB
+			resposta
+				UPDATE Grupo_Questao SET flagRespondido = true WHERE SEQ_DB == :grupo_Questao.SEQ_DB
+				dropTable Resposta
+		getInputScreenLabel
+			responderQuestoes
+				return lang=custom.msgResponderQuestoes vars=grupo:grupoDescricao
+
+Resposta sync=out cleanupDays=7 notSavedMessage memory
+	id inc ignoreExternal
+	flagOnline int notFill onlineFlagCreate
+	boletim Boletim
+	seqEquipamento SeqEquipamento
+	operador Efetivo_Funcionario
+	equipamento Eqp
+
+	questao Questao notFill ignoreExternal
+
+	CHECK_GRUPO_QUESTAO_SEQ_DB long autoFill=questao.CHECK_GRUPO_QUESTAO_SEQ_DB
+	QUESTAO_SEQ_DB long autoFill=questao.SEQ_DB
+
+	SEQ_DB_DEVICE_MASTER long
+	SEQ_DB_DEVICE long uuid
+
+	data Now timeTypeField=tipoData
+
+	descricaoResposta String autoFill=questao.DESCRICAO ignoreExternal
+	tipo_Resposta Tipo_Resposta getInputScreenLabel=":descricaoResposta" notBack
+
+	OBSERVACAO Str fillCondition="tipo_Resposta.FLAG_OBSERVACAO == true"
+	binaryId Binary picture fillCondition="tipo_Resposta.FLAG_FOTO == true"
+	server name=EQP_APT_RESPOSTA_SP
+	events
+		afterInsert
+			UPDATE Questao SET flagRespondido = true WHERE SEQ_DB == :QUESTAO_SEQ_DB
+			INSERT INTO ResumoCheckList (descricao, tipoResposta, observacao, data) VALUES (:descricaoResposta, :tipo_Resposta, :OBSERVACAO, :data)
+
+	fieldEvents
+		autoFill
+			boletim
+				Boletim b = selectLast FROM Boletim
+				return b
+			SEQ_DB_DEVICE_MASTER
+				return boletim.SEQ_DB_DEVICE
+			operador
+				return boletim.efetivo_Funcionario
+			equipamento
+				return boletim.eqp
+
+//------------------------SYNC = in------------------------
+UPs sync=in memory searchFields=CODIGO,DESCRICAO descriptionFields=CODIGO,DESCRICAO
+	SEQ_DB int
+	CODIGO String
+	DESCRICAO String
+	FLAG_ATIVO boolean defaultValue=false notSync
+	FLAG_FINALIZADO boolean defaultValue=false notSync
+	server name=UPs_Mobile
+	
+OpcoesOperacao
+	id int
+	desc Str
+
+Eqp sync=in memory searchFields=CODIGO,DESCRICAO descriptionFields=CODIGO,DESCRICAO
+	SEQ_DB int
+	CODIGO String
+	DESCRICAO String
+	EQP_TIPO int
+	EQP_CLASSE Eqp_Classe
+	server name=Equipamento_Mobile
+
+Eqp_Classe sync=in memory searchFields=CODIGO,DESCRICAO descriptionFields=CODIGO,DESCRICAO
+	SEQ_DB int
+	CODIGO String
+	DESCRICAO String
+	TIPO String
+	server name=Eqp_Classe_Mobile
+
+Oper sync=in memory searchFields=CODIGO,DESCRICAO descriptionFields=CODIGO,DESCRICAO
+	SEQ_DB int
+	CODIGO String
+	DESCRICAO String
+	FLAG_PRODUTIVA boolean
+	FLAG_OPER_GRUA boolean
+	FLAG_OPER_BATEDOR boolean
+	OPER_GRUPO Oper_Grupo
+	FLAG_MANUTENCAO boolean
+	FLAG_PARADA_OPERACIONAL boolean
+	FLAG_PARADA_PROCESSO boolean
+	TIPO_ACAO int //1:Outros;2:Carga;3:Descarga;4:Abastecimento
+	server name=Oper_Mobile
+
+Oper_Grupo sync=in memory searchFields=CODIGO,DESCRICAO descriptionFields=CODIGO,DESCRICAO
+	SEQ_DB int
+	CODIGO String
+	DESCRICAO String
+	FLAG_PARADA_PROCESSO boolean
+	FLAG_PARADA_OPERACIONAL boolean
+	FLAG_MANUTENCAO boolean
+	server name=Oper_Grupo_Mobile
+
+Efetivo_Funcionario sync=in memory searchFields=CRACHA,NOME descriptionFields=CRACHA,NOME
+	SEQ_DB int
+	CRACHA String
+	NOME String
+	server name=Funcionario_Mobile
+	
+Combustivel sync=in searchFields=CODIGO,DESCRICAO descriptionFields=CODIGO,DESCRICAO memory
+	SEQ_DB long
+	CODIGO String
+	DESCRICAO String
+	server name=Combustivel_Mobile
+
+Posto_Abastecimento sync=in searchFields=CODIGO descriptionFields=CODIGO,DESCRICAO
+	SEQ_DB long
+	CODIGO String
+	DESCRICAO String
+	server name=Posto_Abastecimento_Mobile
+//------------------------SYNC = in------------------------
+
+Location_Sat sync=out satellite
+	lat int
+	long int
+	time int
+
+Binary sync=out cleanupDays=1 notSavedMessage
+	id String uuid
+	date now
+	data bytes
+
+_MARTE_STATUS
+	id inc
+	marteId String
+	date Now
+	ignitionState boolean
+	workingState String
+	engineState boolean
+	engineHour long
+	engineMinutes int
+	engineSeconds int
+	engineHorimeter long
+	engineHorimeterDecimal Decimal decimalSize=2
+	ignitionHour long
+	ignitionMinutes int
+	ignitionSeconds int
+	ignitionHorimeter long
+	ignitionHorimeterDecimal Decimal decimalSize=2
+	auxHour long
+	auxMinutes int
+	auxSeconds int
+	auxHorimeter long
+	auxHorimeterDecimal Decimal decimalSize=2
+	speed int
+	gpsSpeed int
+	rpm int
+	odometer String
+	odometerTrip String
+	reportDate String
+	RUS01 String
+	RUS02 String
+	RUS03 String

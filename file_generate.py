@@ -4,8 +4,13 @@ import re
 import os
 
 def sanitize_filename(name):
-    # Replace special characters with underscores
-    return re.sub(r'[^\w]', '_', name)
+    # Extract the first word and replace special characters with underscores
+    match = re.match(r'\b\w+\b', name)
+    if match:
+        first_word = match.group()
+        return re.sub(r'[^\w]', '', first_word)
+    else:
+        return ""  # Return empty string if no match found
 
 def generate_section_files(file_path):
     log_area.delete(1.0, tk.END)  # Clear previous logs
@@ -23,7 +28,7 @@ def generate_section_files(file_path):
         section_content = []
 
         for line in lines:
-            if line.strip():  # Non-empty line
+            if line.strip() and not line.strip().startswith("//"):  # Non-empty line and not a comment
                 if line.startswith('\t'):  # Content line
                     section_content.append(line)
                 else:  # Section title line

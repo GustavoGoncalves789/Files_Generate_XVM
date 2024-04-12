@@ -1,4 +1,4 @@
-Auth
+Aut
 	idEmpresa long
 	idFilial long
 	idLocal long

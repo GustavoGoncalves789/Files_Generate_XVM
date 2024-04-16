@@ -4,6 +4,11 @@ import re
 import os
 
 def sanitize_filename(name):
+    forbidden_characters = {"<", ">", ":", '"', "/", "\\", "|", "?", "*"}
+    
+    # Remove all forbidden characters from the name
+    name = ''.join(char for char in name if char not in forbidden_characters)
+    
     # Extract the first word and replace special characters with underscores
     match = re.match(r'\b\w+\b', name)
     if match:
